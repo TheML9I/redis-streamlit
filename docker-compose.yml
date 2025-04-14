@@ -14,9 +14,10 @@ services:
       --save 900 1
       --save 300 10
       --save 60 10000
+      --port ${REDIS_PORT}
     restart: unless-stopped
-    ports:
-      - "6379:6379"
+    expose:
+      - ${REDIS_PORT}
     volumes:
       - redis-data:/data
       - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
@@ -52,7 +53,7 @@ services:
     ports:
       - "9121:9121"
     environment:
-      - REDIS_ADDR=redis://redis:6379
+      - REDIS_ADDR=redis://redis:${REDIS_PORT}
       - REDIS_PASSWORD=${REDIS_PASSWORD}
     depends_on:
       - redis
@@ -87,7 +88,7 @@ services:
       - ./app:/app
     environment:
       - REDIS_HOST=redis
-      - REDIS_PORT=6379
+      - REDIS_PORT=${REDIS_PORT}
       - REDIS_PASSWORD=${REDIS_PASSWORD}
     depends_on:
       - redis
