@@ -90,15 +90,12 @@ def main():
                 with col1:
                     key = st.text_input("Key")
                     value = st.text_area("Value")
-                    expiry = st.number_input("Expiry (seconds, 0 for no expiry)", min_value=0, value=0)
+                    expiry = st.number_input("Expiry (seconds, 0 for no expiry)", min_value=0, value=None)
                     
                     if st.button("Save String"):
                         if key and value:
                             try:
-                                if expiry > 0:
-                                    r.setex(key, expiry, value)
-                                else:
-                                    r.set(key, value)
+                                r.set(key, value, ex=expiry)
                                 st.success(f"String saved with key: {key}")
                             except Exception as e:
                                 st.error(f"Error saving string: {e}")

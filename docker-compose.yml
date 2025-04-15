@@ -1,11 +1,10 @@
-version: '3.8'
-
 services:
   redis:
+    profiles: ["redis-only", "redis-ext", "redis-ext-app", "redis-app"]
     image: redis:7.4
     container_name: redis-ha
     command: >
-      redis-server 
+      redis-server
       --requirepass ${REDIS_PASSWORD}
       --appendonly yes
       --appendfsync everysec
@@ -15,12 +14,14 @@ services:
       --save 300 10
       --save 60 10000
       --port ${REDIS_PORT}
+      --bind 0.0.0.0
     restart: unless-stopped
     expose:
       - ${REDIS_PORT}
+    ports:
+      - ${REDIS_PORT}:${REDIS_PORT}
     volumes:
       - redis-data:/data
-      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
@@ -47,6 +48,7 @@ services:
       - redis-network
 
   redis-exporter:
+    profiles: ["redis-ext", "redis-ext-app"]
     image: oliver006/redis_exporter:latest
     container_name: redis-exporter
     restart: unless-stopped
@@ -61,6 +63,7 @@ services:
       - redis-network
 
   redis-backup:
+    profiles: ["redis-ext", "redis-ext-app"]
     image: redis:7.4
     container_name: redis-backup
     volumes:
@@ -77,6 +80,7 @@ services:
       - redis-network
 
   streamlit-app:
+    profiles: ["redis-app", "redis-ext-app", "app-only"]
     build:
       context: ./app
       dockerfile: Dockerfile
@@ -87,11 +91,9 @@ services:
     volumes:
       - ./app:/app
     environment:
-      - REDIS_HOST=redis
+      - REDIS_HOST=${REDIS_HOST}
       - REDIS_PORT=${REDIS_PORT}
       - REDIS_PASSWORD=${REDIS_PASSWORD}
-    depends_on:
-      - redis
     networks:
       - redis-network
     healthcheck:
@@ -100,6 +102,27 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
+
+  memtier_benchmark:
+    profiles: ["benchmark"]
+    image: redislabs/memtier_benchmark
+    container_name: memtier_benchmark
+    command: --ratio=1:0 --test-time=60 --rate-limiting=100 -t 2 -c 50 --key-pattern=P:P --key-maximum 100 --server=${REDIS_HOST} --port=${REDIS_PORT} -a ${REDIS_PASSWORD} --out-file=/benchmark-data/outfile
+    volumes:
+      - ./output:/benchmark-data
+
+  script_numbers:
+    profiles: ["scripts"]
+    build:
+      context: ./scripts
+      dockerfile: Dockerfile
+    container_name: script_numbers
+    environment:
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    volumes:
+      - ./scripts:/scripts
 
 networks:
   redis-network:
