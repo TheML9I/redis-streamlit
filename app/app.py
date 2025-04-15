@@ -9,22 +9,28 @@ import time
 from datetime import datetime
 
 from exceptions import ImproperConfiguration
+from sample_data import init_sample_data
 
 # Redis connection settings
 REDIS_HOST = os.getenv('REDIS_HOST', 'redis')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 REDIS_PASSWORD = os.getenv('REDIS_PASSWORD')
 
+REDIS_HOST_REPLICA = os.getenv('REDIS_HOST_REPLICA', 'redis')
+REDIS_PORT_REPLICA = int(os.getenv('REDIS_PORT_REPLICA', 6379))
+REDIS_PASSWORD_REPLICA = os.getenv('REDIS_PASSWORD_REPLICA')
+
 if not REDIS_PASSWORD:
     raise ImproperConfiguration("REDIS_PASSWORD environment variable is required but not set.")
 
 
-def get_redis_connection():
+def get_redis_connection(replica=False):
+    st.success(f"Replica: {bool(replica)}")
     try:
         r = redis.Redis(
-            host=REDIS_HOST,
-            port=REDIS_PORT,
-            password=REDIS_PASSWORD,
+            host=REDIS_HOST if not replica else REDIS_HOST_REPLICA,
+            port=REDIS_PORT if not replica else REDIS_PORT_REPLICA,
+            password=REDIS_PASSWORD if not replica else REDIS_PASSWORD_REPLICA,
             decode_responses=True,
             socket_timeout=5,
             socket_connect_timeout=5,
@@ -45,19 +51,20 @@ def get_redis_info(r):
     except Exception as e:
         st.error(f"Failed to get Redis info: {e}")
         return {}
+    
+def ping_connection(r):
+    try:
+        ping_result = r.ping()
+        st.success(f"Connected to Redis server: {r.get_connection_kwargs()['host']}: {r.get_connection_kwargs()['port']}")
+    except Exception as e:
+        st.error(f"Redis connection error: {e}")
+        return
 
 def main():
     # Connect to Redis
-    r = get_redis_connection()
+    r = get_redis_connection(replica=False)
     if not r:
         st.error("Cannot connect to Redis server. Please check your connection settings.")
-        return
-    
-    try:
-        ping_result = r.ping()
-        st.success(f"Connected to Redis server: {REDIS_HOST}:{REDIS_PORT}")
-    except Exception as e:
-        st.error(f"Redis connection error: {e}")
         return
 
     # Get Redis Info
@@ -67,6 +74,7 @@ def main():
     init_sample_data(r)
     
     def redis_stat():
+        ping_connection(r)
         st.title("Redis Data Explorer")
 
         # Create tabs
@@ -320,7 +328,7 @@ def main():
                 col1, col2 = st.columns(2)
                 with col1:
                     st.metric("Total Commands Processed", stats.get("total_commands_processed", "N/A"))
-                    st.metric("Connected Clients", info.get("connected_clients", "N/A"))
+                    st.metric("Connected Clients", stats.get("connected_clients", "N/A"))
                 with col2:
                     st.metric("Keyspace Hits", stats.get("keyspace_hits", "N/A"))
                     st.metric("Keyspace Misses", stats.get("keyspace_misses", "N/A"))
@@ -331,7 +339,7 @@ def main():
             # Key statistics
             st.subheader("Keyspace")
             try:
-                keyspace = info.get("keyspace", {})
+                keyspace = r.info("keyspace")
                 if keyspace:
                     for db, stats in keyspace.items():
                         st.text(f"{db}: {stats}")
@@ -370,7 +378,7 @@ def main():
 
     def checkout():
         st.title("Checkout")
-
+        ping_connection(r)
         # Create tabs
         tab1, tab2, tab3, tab4, tab5 = st.tabs([
             "Browse Products", 
@@ -706,78 +714,164 @@ def main():
                                     st.success("Order cancelled successfully!")
                                     st.experimental_rerun()
 
+    def redis_stat_replica():
+        st.title("Redis Data Explorer (Replica)")
+        r = get_redis_connection(replica=True)
+        info = get_redis_info(r)
+        ping_connection(r)
+
+        # Create tabs
+        tab1, tab2, tab3 = st.tabs(["Read Data", "Monitoring", "Redis Info"])
+
+        # Tab 1: Read data from Redis
+        with tab1:
+            st.header("Read Data from Redis")
+            
+            # Get all keys
+            try:
+                all_keys = r.keys("*")
+                
+                if not all_keys:
+                    st.info("No keys found in Redis")
+                    return
+                    
+                selected_key = st.selectbox("Select a key", all_keys)
+                
+                if selected_key:
+                    # Get key type
+                    key_type = r.type(selected_key)
+                    ttl = r.ttl(selected_key)
+                    
+                    st.subheader(f"Key: {selected_key}")
+                    st.text(f"Type: {key_type}")
+                    st.text(f"TTL: {ttl if ttl > -1 else 'No expiry'}")
+                    
+                    # Display data based on type
+                    if key_type == "string":
+                        value = r.get(selected_key)
+                        st.text_area("Value", value, height=200, disabled=True)
+                    
+                    elif key_type == "hash":
+                        hash_data = r.hgetall(selected_key)
+                        st.json(hash_data)
+                    
+                    elif key_type == "list":
+                        list_items = r.lrange(selected_key, 0, -1)
+                        for idx, item in enumerate(list_items):
+                            st.text(f"{idx}: {item}")
+                    
+                    elif key_type == "set":
+                        set_items = r.smembers(selected_key)
+                        for item in set_items:
+                            st.text(item)
+                    
+                    elif key_type == "zset":
+                        zset_items = r.zrange(selected_key, 0, -1, withscores=True)
+                        for item, score in zset_items:
+                            st.text(f"{item}: {score}")
+                    
+                    # Delete key option
+                    if st.button("Delete Key"):
+                        r.delete(selected_key)
+                        st.success(f"Deleted key: {selected_key}")
+                        st.experimental_rerun()
+                        
+            except Exception as e:
+                st.error(f"Error retrieving keys: {e}")
+        
+        # Tab 2: Monitoring
+        with tab2:
+            st.header("Redis Monitoring")
+            
+            # Auto-refresh
+            refresh = st.checkbox("Auto-refresh (5s)", value=False)
+            
+            if refresh:
+                st.experimental_rerun()
+                time.sleep(5)
+            
+            # Memory usage
+            st.subheader("Memory Usage")
+            try:
+                memory_info = r.info("memory")
+                used_memory = memory_info.get("used_memory_human", "N/A")
+                used_memory_peak = memory_info.get("used_memory_peak_human", "N/A")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Used Memory", used_memory)
+                with col2:
+                    st.metric("Peak Memory", used_memory_peak)
+                    
+                # Memory usage over time would require storing historical data
+                
+            except Exception as e:
+                st.error(f"Error retrieving memory info: {e}")
+            
+            # Operations stats
+            st.subheader("Operations")
+            try:
+                stats = r.info("stats")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Total Commands Processed", stats.get("total_commands_processed", "N/A"))
+                    st.metric("Connected Clients", stats.get("connected_clients", "N/A"))
+                with col2:
+                    st.metric("Keyspace Hits", stats.get("keyspace_hits", "N/A"))
+                    st.metric("Keyspace Misses", stats.get("keyspace_misses", "N/A"))
+                    
+            except Exception as e:
+                st.error(f"Error retrieving stats: {e}")
+            
+            # Key statistics
+            st.subheader("Keyspace")
+            try:
+                keyspace = r.info("keyspace")
+                if keyspace:
+                    for db, stats in keyspace.items():
+                        st.text(f"{db}: {stats}")
+                else:
+                    st.info("No keyspace information available")
+            except Exception as e:
+                st.error(f"Error retrieving keyspace info: {e}")
+        
+        # Tab 3: Redis Info
+        with tab3:
+            st.header("Redis Server Information")
+            
+            try:
+                server_info = r.info("server")
+                
+                st.subheader("Server")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Redis Version", server_info.get("redis_version", "N/A"))
+                    st.metric("Uptime", f"{server_info.get('uptime_in_days', 'N/A')} days")
+                with col2:
+                    st.metric("Process ID", server_info.get("process_id", "N/A"))
+                    st.metric("TCP Port", server_info.get("tcp_port", "N/A"))
+                
+                st.subheader("Persistence")
+                persistence = r.info("persistence")
+                st.text(f"AOF Enabled: {persistence.get('aof_enabled', 'N/A')}")
+                st.text(f"RDB Saves: {persistence.get('rdb_changes_since_last_save', 'N/A')} changes since last save")
+                
+                # Display full info as JSON
+                with st.expander("Show All Redis Info"):
+                    st.json(info)
+                    
+            except Exception as e:
+                st.error(f"Error retrieving Redis info: {e}")
+
 
     pg = st.navigation([
         st.Page(redis_stat, title="Redis Data Explorer", icon="🔍"),
+        st.Page(redis_stat_replica, title="Redis Data Explorer (Replica)", icon="🪩"),
         st.Page(checkout, title="Checkout", icon="🛒"),
     ])
 
     pg.run()
-
-def init_sample_data(r):
-    """Initialize sample data if it doesn't exist"""
-    # Check if we already have data
-    if r.scard("users:index") > 0:
-        return
-    
-    # Sample categories
-    categories = [
-        {"id": "cat1", "name": "Electronics", "description": "Electronic devices and gadgets"},
-        {"id": "cat2", "name": "Clothing", "description": "Apparel and accessories"},
-        {"id": "cat3", "name": "Books", "description": "Books and publications"},
-        {"id": "cat4", "name": "Home", "description": "Home and kitchen items"},
-    ]
-    
-    # Sample products
-    products = [
-        {"id": "prod1", "name": "Smartphone", "description": "Latest smartphone model", "price": 699.99, "stock": 50, "categories": ["cat1"]},
-        {"id": "prod2", "name": "Laptop", "description": "High-performance laptop", "price": 1299.99, "stock": 25, "categories": ["cat1"]},
-        {"id": "prod3", "name": "T-shirt", "description": "Cotton t-shirt", "price": 19.99, "stock": 100, "categories": ["cat2"]},
-        {"id": "prod4", "name": "Jeans", "description": "Denim jeans", "price": 49.99, "stock": 75, "categories": ["cat2"]},
-        {"id": "prod5", "name": "Novel", "description": "Bestselling fiction novel", "price": 14.99, "stock": 200, "categories": ["cat3"]},
-        {"id": "prod6", "name": "Cookbook", "description": "Gourmet recipes", "price": 24.99, "stock": 40, "categories": ["cat3", "cat4"]},
-        {"id": "prod7", "name": "Blender", "description": "Kitchen blender", "price": 79.99, "stock": 30, "categories": ["cat4"]},
-        {"id": "prod8", "name": "Smart TV", "description": "4K Smart TV", "price": 549.99, "stock": 15, "categories": ["cat1", "cat4"]},
-    ]
-    
-    # Sample users
-    users = [
-        {"id": "user1", "username": "johndoe", "email": "john@example.com", "created_at": "2023-01-15"},
-        {"id": "user2", "username": "janedoe", "email": "jane@example.com", "created_at": "2023-02-20"},
-    ]
-    
-    # Seed categories
-    for category in categories:
-        r.hset(f"category:{category['id']}", mapping={
-            "name": category["name"],
-            "description": category["description"]
-        })
-        r.sadd("categories:index", category["id"])
-    
-    # Seed products
-    for product in products:
-        r.hset(f"product:{product['id']}", mapping={
-            "name": product["name"],
-            "description": product["description"],
-            "price": product["price"],
-            "stock": product["stock"]
-        })
-        r.sadd("products:index", product["id"])
-        
-        # Add product to categories
-        for category_id in product["categories"]:
-            r.sadd(f"product:{product['id']}:categories", category_id)
-            r.sadd(f"category:{category_id}:products", product["id"])
-    
-    # Seed users
-    for user in users:
-        r.hset(f"user:{user['id']}", mapping={
-            "username": user["username"],
-            "email": user["email"],
-            "created_at": user["created_at"]
-        })
-        r.sadd("users:index", user["id"])
-
 
 
 if __name__ == "__main__":

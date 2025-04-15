@@ -94,6 +94,9 @@ services:
       - REDIS_HOST=${REDIS_HOST}
       - REDIS_PORT=${REDIS_PORT}
       - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - REDIS_HOST_REPLICA=${REDIS_HOST_REPLICA}
+      - REDIS_PORT_REPLICA=${REDIS_PORT_REPLICA}
+      - REDIS_PASSWORD_REPLICA=${REDIS_PASSWORD_REPLICA}
     networks:
       - redis-network
     healthcheck:
