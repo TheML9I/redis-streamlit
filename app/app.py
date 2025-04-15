@@ -18,6 +18,7 @@ REDIS_PASSWORD = os.getenv('REDIS_PASSWORD')
 if not REDIS_PASSWORD:
     raise ImproperConfiguration("REDIS_PASSWORD environment variable is required but not set.")
 
+
 def get_redis_connection():
     try:
         r = redis.Redis(
@@ -62,11 +63,8 @@ def main():
     # Get Redis Info
     info = get_redis_info(r)
 
-    # st.set_page_config(
-    #     page_title="Redis Data Explorer",
-    #     page_icon="🔄",
-    #     layout="wide"
-    # )
+    # Init Sample Data
+    init_sample_data(r)
     
     def redis_stat():
         st.title("Redis Data Explorer")
@@ -715,6 +713,72 @@ def main():
     ])
 
     pg.run()
+
+def init_sample_data(r):
+    """Initialize sample data if it doesn't exist"""
+    # Check if we already have data
+    if r.scard("users:index") > 0:
+        return
+    
+    # Sample categories
+    categories = [
+        {"id": "cat1", "name": "Electronics", "description": "Electronic devices and gadgets"},
+        {"id": "cat2", "name": "Clothing", "description": "Apparel and accessories"},
+        {"id": "cat3", "name": "Books", "description": "Books and publications"},
+        {"id": "cat4", "name": "Home", "description": "Home and kitchen items"},
+    ]
+    
+    # Sample products
+    products = [
+        {"id": "prod1", "name": "Smartphone", "description": "Latest smartphone model", "price": 699.99, "stock": 50, "categories": ["cat1"]},
+        {"id": "prod2", "name": "Laptop", "description": "High-performance laptop", "price": 1299.99, "stock": 25, "categories": ["cat1"]},
+        {"id": "prod3", "name": "T-shirt", "description": "Cotton t-shirt", "price": 19.99, "stock": 100, "categories": ["cat2"]},
+        {"id": "prod4", "name": "Jeans", "description": "Denim jeans", "price": 49.99, "stock": 75, "categories": ["cat2"]},
+        {"id": "prod5", "name": "Novel", "description": "Bestselling fiction novel", "price": 14.99, "stock": 200, "categories": ["cat3"]},
+        {"id": "prod6", "name": "Cookbook", "description": "Gourmet recipes", "price": 24.99, "stock": 40, "categories": ["cat3", "cat4"]},
+        {"id": "prod7", "name": "Blender", "description": "Kitchen blender", "price": 79.99, "stock": 30, "categories": ["cat4"]},
+        {"id": "prod8", "name": "Smart TV", "description": "4K Smart TV", "price": 549.99, "stock": 15, "categories": ["cat1", "cat4"]},
+    ]
+    
+    # Sample users
+    users = [
+        {"id": "user1", "username": "johndoe", "email": "john@example.com", "created_at": "2023-01-15"},
+        {"id": "user2", "username": "janedoe", "email": "jane@example.com", "created_at": "2023-02-20"},
+    ]
+    
+    # Seed categories
+    for category in categories:
+        r.hset(f"category:{category['id']}", mapping={
+            "name": category["name"],
+            "description": category["description"]
+        })
+        r.sadd("categories:index", category["id"])
+    
+    # Seed products
+    for product in products:
+        r.hset(f"product:{product['id']}", mapping={
+            "name": product["name"],
+            "description": product["description"],
+            "price": product["price"],
+            "stock": product["stock"]
+        })
+        r.sadd("products:index", product["id"])
+        
+        # Add product to categories
+        for category_id in product["categories"]:
+            r.sadd(f"product:{product['id']}:categories", category_id)
+            r.sadd(f"category:{category_id}:products", product["id"])
+    
+    # Seed users
+    for user in users:
+        r.hset(f"user:{user['id']}", mapping={
+            "username": user["username"],
+            "email": user["email"],
+            "created_at": user["created_at"]
+        })
+        r.sadd("users:index", user["id"])
+
+
 
 if __name__ == "__main__":
     main()
